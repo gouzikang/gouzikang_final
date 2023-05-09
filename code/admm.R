@@ -1,0 +1,216 @@
+library(readr)
+#library(abind)
+library(glmnet)
+library(methods)
+library(rqPen)
+library(doParallel)
+library(RSpectra)
+library(mvtnorm)
+library(MASS)
+
+n=756
+n1=504
+n2=n-n1
+p=1000
+
+mub <- c(0.78282,0.51803,0.41003)
+covb <- matrix(c(0.029145,0.023873,0.010184,0.023873,0.053951,-0.006967,0.010184,-0.006967,0.086856),3,3)
+muf <- c(0.023558,0.012989,0.020714)
+covf <- matrix(c(1.2507,-0.034999,-0.20419,-0.034999,0.31564,-0.0022526,-0.20419,-0.0022526,0.19303),3,3)
+
+
+set.seed(2020)
+B <- mvrnorm(p, mub, covb) #factor loading
+std <- rgamma(p,shape=3.3586,scale=0.1876)
+mue <- rep(0,p)
+cove <- diag(std**2)
+
+
+
+
+#m <- sum(ryn<0)#累计收益率为负值的股票数
+
+# #单只股票的夏普率
+# rf <- rep(0,p)
+# sd <- rep(0,p)
+# sr1 <- rep(0,p)
+# 
+# #计算方式1
+# for (i in 1:p){
+#   rf[i] <- mean(R[,i])#日回报率的均值
+#   sd[i] <- sd(R[,i])#日回报率的标准差
+#   sr1[i] <- rf[i]/sd[i]*sqrt(252)
+# }
+# 
+# #计算方式2
+# sr2 <- rep(0,p)
+# for (i in 1:p){
+#   sr2[i] <- ryn[i]*100/sd(R[,i])/sqrt(252)
+# }
+
+
+
+# zhongshu <- function(x){
+#   return(as.numeric(names(table(x))[table(x)==max(table(x))]))
+# }
+
+l2 <- function(x){
+  sum(x^2)
+}
+shrink <- function(x,y){
+  sign(x)*pmax(0, (abs(x)-y))
+}
+
+lpd_admm_constrained <- function(R, lambda,
+                                 max_iter, eabs, erel,
+                                 theta, rho, r){
+  
+  Sigma <- cov(R)
+  DiffMean <- apply(R,2,mean)
+  DiffMean <- matrix(DiffMean,p,1)
+  
+  omega <- rep(1/p,p) 
+  z <- rep(0,p)
+  gamma <- rep(0,p)
+  tao <- rho*eigs_sym(t(Sigma)%*%Sigma, 1)$values
+  phi <- 0
+  Alpha <- rep(1,p)
+  
+  
+  Sigmap <- rbind(Sigma,Alpha)
+  DiffMeanp <- rbind(DiffMean,1/r)
+  
+  Z <- rbind(matrix(z,p,1),0)
+  Z.1 <- Z
+  Gamma <- rbind(matrix(gamma,p,1),phi)
+  #omega.m<-matrix(0, nrow=p/K, ncol=K)
+  #  d.3 <- l2(as.vector(beta.m)-beta.0)
+  dualres = sqrt(l2(rho*t(Sigmap)%*%(Z-Z.1)))
+  primres = sqrt(l2(Sigmap%*%omega-Z-r*DiffMeanp))
+  #dualres <- sqrt(l2(phi*t(X)%*%(z.1-z)))
+  epri = sqrt(p+1)*eabs + erel*max(sqrt(l2(Sigmap%*%omega)), sqrt(l2(Z)), sqrt(l2(r*DiffMeanp)))
+  edual = sqrt(p)*eabs + erel*sqrt(l2(t(Sigmap)%*%Gamma))
+  
+  
+  k <- 1
+  while ((primres > epri | dualres > edual ) & k < max_iter){
+    
+    z.1 <- z
+    Z.1 <- rbind(matrix(z.1,p,1),0)
+    
+    omega <- shrink(omega-rho/tao*(t(Sigma)%*%(Sigma%*%omega-r*DiffMean-z+1/rho*gamma)+phi/rho*Alpha),1/tao)
+    
+    z <- pmin(pmax(Sigma%*%omega-r*DiffMean + 1/rho*gamma,-lambda*Alpha), lambda*Alpha)
+    Z <- rbind(matrix(z,p,1),0)
+    
+    gamma <- gamma+theta*rho*(Sigma%*%omega-r*DiffMean-z)
+    
+    phi <- phi +theta*rho*(sum(omega)-1)
+    
+    Gamma <- rbind(matrix(gamma,p,1),phi)
+    
+    dualres = sqrt(l2(rho*t(Sigmap)%*%(Z-Z.1)))
+    primres = sqrt(l2(Sigmap%*%omega-Z-r*DiffMeanp))
+    epri = sqrt(p+1)*eabs + erel*max(sqrt(l2(Sigmap%*%omega)), sqrt(l2(Z)), sqrt(l2(r*DiffMeanp)))
+    edual = sqrt(p)*eabs + erel*sqrt(l2(t(Sigmap)%*%Gamma))
+    
+    k <- k+1 
+    
+    #   print(c(k, l2(as.vector(beta.m)-beta.0), sum(beta.m!=0)))
+  }
+  return(omega)
+}
+
+
+T=5
+return_in <- rep(0,T)
+risk_in <- rep(0,T)
+target_in <- rep(0,T)
+sharpe_ratio_in <- rep(0,T)
+
+OMEGA <- matrix(0,p,T)
+
+
+return_out <- rep(0,T)
+risk_out <- rep(0,T)
+target_out <- rep(0,T)
+sharpe_ratio_out <- rep(0,T)
+
+long <- rep(0,T)
+short <- rep(0,T)
+max<- rep(0,T)
+min<- rep(0,T)
+
+for (t in 1:T){
+  set.seed(2019+t)
+  F <- mvrnorm(n,muf,covf)
+  F <-t(F)
+  
+  e <- mvrnorm(n,mue,cove)
+  e <- t(e)
+  R <- B%*%F+e
+  
+  R_in <- R[,1:n1] #in_sample
+  R_out<- R[,(n1+1):n] #out_of_sample
+  # 
+  R_in <- t(R_in)
+  R_out <- t(R_out)
+  
+  mu_in <- apply(R_in,2,mean)
+  mu_in <- matrix(mu_in,p,1)
+  Sigma_in <- cov(R_in)
+  
+  mu_out <- apply(R_out,2,mean)
+  mu_out <- matrix(mu_out,p,1)
+  Sigma_out <- cov(R_out)
+  
+  # DiffMean_out <- apply(R_out,2,mean)
+  # DiffMean_out <- matrix(DiffMean_out,p,1)
+  # Sigma_out <- cov(R_out)
+  
+  # # ##in_sample
+  # #单只股票的累计收益率
+  # rtn <- rep(1,p)
+  # ryn <- rep(0,p)
+  # for (i in (1:p)){
+  #   for (j in (1:n1)){
+  #     rtn[i] <- rtn[i]*(1+R[j,i]/100)
+  #   }
+  #   rtn[i] <- rtn[i]-1#累计收益率
+  # }
+  # 
+  # T <- n1/252
+  # ryn <- (rtn+1)**(1/T)-1#年累计收益率
+  
+  
+    res_admm_constrained=lpd_admm_constrained(R_in, lambda=0.1,
+                                              max_iter=10000,
+                                              eabs=0.001,
+                                              erel=0.001,
+                                              theta=1.618,
+                                              rho=0.25,
+                                              r=1/2)
+    omega <- matrix(res_admm_constrained,p,1)
+    return_in[t] <- t(omega)%*%mu_in
+    risk_in[t] <- t(omega)%*%Sigma_in%*%omega
+    #sharpe_ratio1 <- Ry1/Sd/sqrt(252)
+    sharpe_ratio_in[t] <- return_in[t]/sqrt(risk_in[t])*sqrt(252)
+    target_in[t] <- 1/2*risk_in[t]-1/2*return_in[t]
+    OMEGA[,t] <- omega
+  
+  max[t]<- max(OMEGA[,t])
+  min[t]<- min(OMEGA[,t])
+  long[t] <- sum(OMEGA[,t]>0)
+  short[t] <- sum(OMEGA[,t]<0)
+  
+  #out_of_sample
+  return_out[t] <- t(OMEGA[,t])%*%mu_out
+  risk_out[t] <- t(OMEGA[,t])%*%Sigma_out%*%(OMEGA[,t])
+  #sharpe_ratio1 <- Ry1/Sd/sqrt(252)
+  sharpe_ratio_out[t] <- return_out[t]/sqrt(risk_out[t])*sqrt(252)
+  target_out[t] <- 1/2*risk_out[t]-1/2*return_out[t]
+}
+
+
+save.image(file = "ADMM.Rdata")
+
