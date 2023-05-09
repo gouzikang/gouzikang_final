@@ -3,7 +3,7 @@ RUC course project: Advanced Statistical Analysis in Spring 2023.
 
 # File description
 
-Folder **Code** contains the main code for this project, where **data processing.ipynb** helps us to collate raw data. **admm.R**, **qpsolve.R** contain two models to tackle portfolio allocation problem via simulation data;  **admm_empirical.R** and **qpsolve_empirical.R**use the S&P 500 index to tackle portfolio allocation problem.
+Folder **Code** contains the main code for this project, where **data processing.ipynb** helps us to collate raw data. **admm.R**, **qpsolve.R** contain two models to tackle portfolio allocation problem via simulation data;  **admm_empirical.R** and **qpsolve_empirical.R** use the S&P 500 index to tackle portfolio allocation problem.
 
 **SP 500 Stock Prices 2014-2017.csv** is the main data I use in my project. The data can be obtained via  https://www.kaggle.com/datasets/gauravmehta13/sp-500-stock-prices.
 
